@@ -2,11 +2,20 @@ variable "components" {
   type = map(object({
     platform    = string
     version     = string
-    data        = optional(string)
-    uri         = optional(string)
     description = optional(string)
+    data        = optional(string)
   }))
   description = "Map of components to include."
+}
+
+variable "workflows" {
+  type = map(object({
+    name        = string
+    version     = string
+    type        = optional(string)
+    data        = optional(string)
+  }))
+  description = "Map of workflows to include."
 }
 
 variable "recipe_name" {
