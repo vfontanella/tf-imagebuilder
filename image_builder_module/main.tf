@@ -1,29 +1,7 @@
-#tfsec:ignore:aws-iam-no-policy-wildcards
-data "aws_iam_policy_document" "aws_policy" {
-
-  statement {
-    effect    = "Allow"
-    actions   = ["sts:AssumeRole"]
-    resources = ["arn:aws:iam::*:role/EC2ImageBuilderDistributionCrossAccountRole"]
-  }
-
-}
-
-data "aws_iam_policy_document" "assume" {
-  statement {
-    actions = ["sts:AssumeRole"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["ec2.amazonaws.com"]
-    }
-  }
-}
-
 resource "aws_imagebuilder_component" "image_component" {
   for_each = var.image_components
 
-    name        = "${each.key}-
+    name        = "${each.key}-component
     platform    = each.value.platform
     version     = each.value.version
     description = each.value.description
@@ -137,7 +115,7 @@ resource "aws_imagebuilder_infrastructure_configuration" "imagebuilder_infrastru
     subnet_id                     = var.subnet_id
     security_group_ids            = [aws_security_group.imagebuilder_security_group[*].id]
     terminate_instance_on_failure = true
-    instance_profile_name         = var.instance_profile
+    instance_profile_name         = aws_iam_instance_profile.EC2InstanceProfileImageBuilder.name
 }
 
 resource aws_imagebuilder_workflow image_workflow {
@@ -191,32 +169,81 @@ resource "aws_imagebuilder_image_pipeline" "image_pipeline" {
   status = "ENABLED"
 }
 
+#tfsec:ignore:aws-iam-no-policy-wildcards
+data "aws_iam_policy_document" "aws_policy" {
+
+  statement {
+    effect    = "Allow"
+    actions   = ["sts:AssumeRole"]
+    resources = ["arn:aws:iam::*:role/EC2ImageBuilderDistributionCrossAccountRole"]
+  }
+}
+
+resource aws_iam_role DocetEC2ImageBuilderRole {
+  assume_role_policy = jsonencode(
+    {
+      Statement = [
+        {
+          Action = "sts:AssumeRole"
+          Effect = "Allow"
+          Principal = {
+            Service = "ec2.amazonaws.com"
+          }
+        },
+      ]
+      Version = "2012-10-17"
+    }
+  )
+  force_detach_policies = false
+  managed_policy_arns = [
+    "arn:aws:iam::aws:policy/AmazonS3FullAccess",
+    "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+    "arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilder",
+    "arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilderECRContainerBuilds",
+  ]
+  max_session_duration = 3600
+  name                 = "EC2InstanceProfileForImageBuilder"
+  path                 = "/"
+  tags                 = var.tags
+}
+
+data "aws_iam_policy_document" "assume" {
+  statement {
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
+  }
+}
+
 resource "aws_iam_role_policy_attachment" "imagebuilder" {
   policy_arn = "arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilder"
-  role       = aws_iam_role.awsserviceroleforimagebuilder.name
+  role       = aws_iam_role.DocetEC2ImageBuilderRole.name
 }
 
 resource "aws_iam_role_policy_attachment" "ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-  role       = aws_iam_role.awsserviceroleforimagebuilder.name
+  role       = aws_iam_role.DocetEC2ImageBuilderRole.name
 }
 
 resource "aws_iam_instance_profile" "iam_instance_profile" {
-  name = "EC2InstanceProfileImageBuilder-${var.name}"
-  role = aws_iam_role.awsserviceroleforimagebuilder.name
+  name       = "EC2InstanceProfileImageBuilder"
+  role       = aws_iam_role.DocetEC2ImageBuilderRole.id
 }
 
 resource "aws_iam_role_policy_attachment" "custom_policy" {
   count      = var.attach_custom_policy ? 1 : 0
   policy_arn = var.custom_policy_arn
-  role       = aws_iam_role.awsserviceroleforimagebuilder.name
+  role       = aws_iam_role.DocetEC2ImageBuilderRole.name
 }
 
 resource "aws_iam_role_policy" "aws_policy" {
-  name = "${var.name}-aws-access"
-  role = aws_iam_role.awsserviceroleforimagebuilder.id
+  name       = "${var.name}-aws-access"
+  role       = aws_iam_role.DocetEC2ImageBuilderRole.name
   #checkov:skip=CKV_AWS_290:The policy must allow *
   #checkov:skip=CKV_AWS_355:The policy must allow *
-  policy = data.aws_iam_policy_document.aws_policy.json
+  policy    = data.aws_iam_policy_document.aws_policy.json
 }
 
