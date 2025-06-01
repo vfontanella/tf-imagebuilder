@@ -1,29 +1,29 @@
 resource "aws_imagebuilder_component" "image_component" {
   for_each = var.image_components
 
-    name        = "${each.key}-component
+    name        = "${each.key}-image-component"
     platform    = each.value.platform
     version     = each.value.version
     description = each.value.description
-    data        = file(each.value.yaml_path)
+    data        = file(each.value.yaml_file)
 }
 
 resource "aws_imagebuilder_component" "container_component" {
   for_each = var.container_components
 
-    name        = each.key
+    name        = "${each.key}-container-component
     platform    = each.value.platform
     version     = each.value.version
     description = each.value.description
-    data        = file(each.value.yaml_path)
+    data        = file(each.value.yaml_file)
 }
 
 resource "aws_imagebuilder_image_recipe" "image_recipe" {
-  count = var.is_image ? 1 : 0
+  for_each = { for k in compact([for k, v in var.image_recipes: v.enabled ? k : ""]): k => var.image_recipes[k] }
 
-  name         = var.recipe_name
-  version      = var.recipe_version
-  parent_image = var.parent_image
+  name         = each.key
+  version      = each.value.version
+  parent_image = each.value.parent_image
   components   = [for k, v in aws_imagebuilder_component.image_component : { component_arn = v.arn }]
   block_device_mapping {
     device_name = "/dev/xvda"
@@ -35,16 +35,16 @@ resource "aws_imagebuilder_image_recipe" "image_recipe" {
 }
 
 resource "aws_imagebuilder_container_recipe" "container_recipe" {
-  count = var.is_image ? 0 : 1
+  for_each = { for k in compact([for k, v in var.container_recipes: v.enabled ? k : ""]): k => var.container_recipes[k] }
 
-  name         = var.recipe_name
-  version      = var.recipe_version
-  parent_image = var.parent_image
+  name         = each.key
+  version      = each.value.version
+  parent_image = each.value.parent_image
   components   = [for k, v in aws_imagebuilder_component.container_component : { component_arn = v.arn }]
   container_type = "DOCKER"
   target_repository {
     service         = "ECR"
-    repository_name = var.target_repo
+    repository_name = each.value.target_repo
   }
 }
 
@@ -56,7 +56,12 @@ resource "aws_security_group" "imagebuilder_security_group" {
     description = "Security Group for for the EC2 Image Builder Build Instances"
     vpc_id      = data.aws_vpc.selected.id
 
-    tags = var.tags
+    tags =  merge(
+    var.additional_tags,
+    {
+      OwneddBy = "DOCET"
+    },
+  )
 }
 
 resource "aws_security_group_rule" "sg_https_ingress" {
@@ -111,8 +116,9 @@ resource "aws_security_group_rule" "sg_internet_egress" {
 resource "aws_imagebuilder_infrastructure_configuration" "imagebuilder_infrastructure_configuration" {
   for_each = { for k in compact([for k, v in var.imagebuilder_infrastructure_configuration: v.enabled ? k : ""]): k => var.imagebuilder_infrastructure_configuration[k] }
     name                          = "${each.key}-imagebuilder-infra"
-    instance_types                = var.instance_types
-    subnet_id                     = var.subnet_id
+    description                   = each.value.description
+    instance_types                = each.value.instance_types
+    subnet_id                     = each.value.subnet_id
     security_group_ids            = [aws_security_group.imagebuilder_security_group[*].id]
     terminate_instance_on_failure = true
     instance_profile_name         = aws_iam_instance_profile.EC2InstanceProfileImageBuilder.name
@@ -124,7 +130,7 @@ resource aws_imagebuilder_workflow image_workflow {
     name = each.key
     version = each.value.version
     type = each.value.type
-    data = file(each.value.workflow_file)
+    data = file(each.value.yaml_file)
 }
 
 resource aws_imagebuilder_workflow container_workflow {
@@ -133,29 +139,35 @@ resource aws_imagebuilder_workflow container_workflow {
     name = each.key
     version = each.value.version
     type = each.value.type
-    data = file(each.value.workflow_file)
+    data = file(each.value.yaml_file)
 }
 
 resource "aws_imagebuilder_image" "imagebuilder_image" {
-  image_recipe_arn                 = aws_imagebuilder_image_recipe.imagebuilder_image_recipe[0].arn
-  infrastructure_configuration_arn = aws_imagebuilder_infrastructure_configuration.imagebuilder_infrastructure_configuration[0].arn
-  distribution_configuration_arn   = try(aws_imagebuilder_distribution_configuration.imagebuilder_distribution_configuration[0].arn, null)
+  for_each = { for k in compact([for k, v in var.image: v.enabled ? k : ""]): k => var.image[k] }
+    image_recipe_arn                 = aws_imagebuilder_image_recipe.imagebuilder_image_recipe[0].arn
+    infrastructure_configuration_arn = aws_imagebuilder_infrastructure_configuration.imagebuilder_infrastructure_configuration[0].arn
+    distribution_configuration_arn   = try(aws_imagebuilder_distribution_configuration.imagebuilder_distribution_configuration[0].arn, null)
 
-  # TODO enable tests configuration
-  image_tests_configuration {
-    image_tests_enabled = false
-  }
-  tags = var.tags
+    # TODO enable tests configuration
+    image_tests_configuration {
+      image_tests_enabled = false
+    }
+    tags =  merge(
+    var.additional_tags,
+      {
+        OwnedBy = "DOCET"
+      },
+    )
 
-  timeouts {
-    create = var.timeout
-  }
+    timeouts {
+      create = each.value.timeout
+    }
 }
 
 resource "aws_imagebuilder_image_pipeline" "image_pipeline" {
   for_each = { for k in compact([for k, v in var.pipelines: v.enabled ? k : ""]): k => var.pipelines[k] }
   
-    name                             = var.is_image ? "${var.name}-image-pipeline" : "${var.name}-container-pipeline"
+    name                             = var.is_image ? "${each.value.name}-image-pipeline" : "${each.value.name}-container-pipeline"
     infrastructure_configuration_arn = aws_imagebuilder_infrastructure_configuration.imagebuilder_infrastructure_configuration[0].arn
     image_recipe_arn                 = var.is_image ? aws_imagebuilder_image_recipe.image_recipe[0].arn : null
     container_recipe_arn             = var.is_image ? null : aws_imagebuilder_container_recipe.container_recipe[0].arn
@@ -167,6 +179,27 @@ resource "aws_imagebuilder_image_pipeline" "image_pipeline" {
       }
     }
   status = "ENABLED"
+}
+
+resource aws_imagebuilder_distribution_configuration image_distribution {
+  for_each = { for k in compact([for k, v in var.image_distribution: v.enabled ? k : ""]): k => var.image_distribution[k] }
+  name = "${each.key}-image-distribution
+
+  distribution {
+    ami_distribution_configuration {
+      ami_tags = {
+        OwnedBy = "DOCET"
+      }
+
+      name = "${each.value.name}-{{ imagebuilder:buildDate }}"
+
+      launch_permission {
+        user_ids = each.value.account_id
+      }
+    }
+
+    region = each.value.region
+  }
 }
 
 #tfsec:ignore:aws-iam-no-policy-wildcards
@@ -204,7 +237,12 @@ resource aws_iam_role DocetEC2ImageBuilderRole {
   max_session_duration = 3600
   name                 = "EC2InstanceProfileForImageBuilder"
   path                 = "/"
-  tags                 = var.tags
+  tags                 =  merge(
+    var.additional_tags,
+    {
+      OwnedBy = "DOCET"
+    },
+  )
 }
 
 data "aws_iam_policy_document" "assume" {

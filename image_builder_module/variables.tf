@@ -1,68 +1,95 @@
-variable "components" {
+variable "image_components" {
   type = map(object({
     platform    = string
     version     = string
     description = optional(string)
-    data        = optional(string)
+    yaml_file   = optional(string)
   }))
-  description = "Map of components to include."
+  description = "Map of image components to include."
 }
 
-variable "workflows" {
+variable "container_components" {
   type = map(object({
-    name        = string
+    platform    = string
+    version     = string
+    description = optional(string)
+    yaml_file   = optional(string)
+  }))
+  description = "Map of image components to include."
+}
+
+variable image_recipes {
+  type = map({
+    enabled      = bool
+    version      = string
+    description  = string
+    parent_image = string
+  })
+}
+
+variable container_recipes {
+  type = map({
+    enabled      = bool
+    version      = string
+    description  = string
+    parent_image = string
+    target_repo  = string
+  })
+}
+
+variable imagebuilder_infrastructure_configuration {
+  type = map(object({
+    name           = string
+    description    = string
+    instance_types = list(string)
+    subnet_id      = string
+  }))
+  description = "Map of infrastructure configuration."
+}
+
+variable image_workflows {
+  type = map(object({
+    enabled     = bool
     version     = string
     type        = optional(string)
-    data        = optional(string)
+    yaml_file   = optional(string)
   }))
-  description = "Map of workflows to include."
+  description = "Map of image workflows to include."
 }
 
-variable "recipe_name" {
-  type        = string
-  description = "Name of the recipe"
+variable container_workflows {
+  type = map(object({
+    enabled     = bool
+    version     = string
+    type        = optional(string)
+    yaml_file   = optional(string)
+  }))
+  description = "Map of image workflows to include."
 }
 
-variable "recipe_version" {
-  type        = string
-  description = "Version of the recipe"
+variable image {
+  type = map(object({
+    enabled     = bool
+    timeouts    = string
+  }))
 }
 
-variable "parent_image" {
-  type        = string
-  description = "Parent image to use"
+variable pipelines {
+  type = map(object{{
+    enabled      = bool
+    name         = string
+  }))
 }
 
-variable "target_repo" {
-  type        = string
-  description = "ECR repo name for docker targets"
-  default     = null
+variable image_distribution {
+  type map(object({
+    name       = optional(string)
+    account_id = list(string)
+    region     = string
+    enabled    = bool
+  }))
 }
 
-variable "instance_types" {
-  type        = list(string)
-  description = "Instance types for infra config"
-}
-
-variable "subnet_id" {
-  type        = string
-  description = "Subnet ID for EC2"
-}
-
-variable "vpc_id" {
-  type        = string
-  description = "VPC ID"
-}
-
-variable "instance_profile" {
-  type        = string
-  description = "IAM Instance profile name"
-}
-
-variable "is_image" {
-  type        = bool
-  description = "Toggle for using EC2 image recipe. False means use Docker."
-}
 
 variable "pipeline_schedule_type" {
   type        = string
@@ -75,3 +102,16 @@ variable "pipeline_schedule_expression" {
   description = "Schedule expression if using 'cron' or 'expression'"
   default     = "cron(0 0 * * ? *)"
 }
+
+variable is_image {
+  type        = bool
+  description = "select, toggle switch to build  AMI image instead"
+  default     = true
+}
+
+variable "additional_tags" {
+  type        = map(string)
+  description = "A mapping of additional resource tags"
+  default     = {}
+}
+
