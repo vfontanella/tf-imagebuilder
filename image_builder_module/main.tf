@@ -11,7 +11,7 @@ resource "aws_imagebuilder_component" "image_component" {
 resource "aws_imagebuilder_component" "container_component" {
   for_each = var.container_components
 
-    name        = "${each.key}-container-component
+    name        = "${each.key}-container-component"
     platform    = each.value.platform
     version     = each.value.version
     description = each.value.description
@@ -24,7 +24,7 @@ resource "aws_imagebuilder_image_recipe" "image_recipe" {
   name         = each.key
   version      = each.value.version
   parent_image = each.value.parent_image
-  components   = [for k, v in aws_imagebuilder_component.image_component : { component_arn = v.arn }]
+  component   = [for k, v in aws_imagebuilder_component.image_component : { component_arn = v.arn }]
   block_device_mapping {
     device_name = "/dev/xvda"
     ebs {
@@ -40,7 +40,7 @@ resource "aws_imagebuilder_container_recipe" "container_recipe" {
   name         = each.key
   version      = each.value.version
   parent_image = each.value.parent_image
-  components   = [for k, v in aws_imagebuilder_component.container_component : { component_arn = v.arn }]
+  component   = [for k, v in aws_imagebuilder_component.container_component : { component_arn = v.arn }]
   container_type = "DOCKER"
   target_repository {
     service         = "ECR"
@@ -49,12 +49,10 @@ resource "aws_imagebuilder_container_recipe" "container_recipe" {
 }
 
 resource "aws_security_group" "imagebuilder_security_group" {
-  for_each = { for k in compact([for k, v in var.imagebuilder_security_group: v.enabled ? k : ""]): k => var.imagebuilder_security_group[k] }
-
   #checkov:skip=CKV2_AWS_5:Security Group is being attached if var create_security_group is true
-    name        = "${each.value.name}-sg"
+    name        = "${var.imagebuilder_security_group}-sg"
     description = "Security Group for for the EC2 Image Builder Build Instances"
-    vpc_id      = data.aws_vpc.selected.id
+    vpc_id      = var.vpc_id ? var.vpc_id : data.aws_vpc.selected.vpc_id
 
     tags =  merge(
     var.additional_tags,
@@ -65,14 +63,13 @@ resource "aws_security_group" "imagebuilder_security_group" {
 }
 
 resource "aws_security_group_rule" "sg_https_ingress" {
-  for_each = { for k in compact([for k, v in var.imagebuilder_security_group: v.enabled ? k : ""]): k => var.imagebuilder_security_group[k] }
 
     type              = "ingress"
     from_port         = 443
     to_port           = 443
     protocol          = "tcp"
-    cidr_blocks       = [data.aws_vpc.selected.cidr_block]
-    security_group_id = aws_security_group.imagebuilder_security_group[each.key].id
+    cidr_blocks       = var.source_cidr ? var.source_cidr : data.aws_vpc.selected.cidr_block
+    security_group_id = aws_security_group.imagebuilder_security_group["${var.imagebuilder_security_group}-sg"].id
     description       = "HTTPS from VPC"
 }
 
@@ -83,8 +80,8 @@ resource "aws_security_group_rule" "sg_rdp_ingress" {
     from_port         = 3389
     to_port           = 3389
     protocol          = "tcp"
-    cidr_blocks       = var.source_cidr
-    security_group_id = aws_security_group.imagebuilder_security_group[each.key].id
+    cidr_blocks       = var.source_cidr ? var.source_cidr : data.aws_vpc.selected.cidr_block
+    security_group_id = aws_security_group.imagebuilder_security_group["${var.imagebuilder_security_group}-sg"].id
     description       = "RDP from the source variable CIDR"
 }
 
@@ -95,8 +92,8 @@ resource "aws_security_group_rule" "sg_ssh_ingress" {
     from_port         = 22
     to_port           = 22
     protocol          = "tcp"
-    cidr_blocks       = var.source_cidr
-    security_group_id = aws_security_group.imagebuilder_security_group[each.key].id
+    cidr_blocks       = var.source_cidr ? var.source_cidr : data.aws_vpc.selected.cidr_block
+    security_group_id = aws_security_group.imagebuilder_security_group["${var.imagebuilder_security_group}-sg"].id
     description       = "RDP from the source variable CIDR"
 }
 
@@ -183,7 +180,7 @@ resource "aws_imagebuilder_image_pipeline" "image_pipeline" {
 
 resource aws_imagebuilder_distribution_configuration image_distribution {
   for_each = { for k in compact([for k, v in var.image_distribution: v.enabled ? k : ""]): k => var.image_distribution[k] }
-  name = "${each.key}-image-distribution
+  name = "${each.key}-image-distribution"
 
   distribution {
     ami_distribution_configuration {
@@ -278,10 +275,10 @@ resource "aws_iam_role_policy_attachment" "custom_policy" {
 }
 
 resource "aws_iam_role_policy" "aws_policy" {
-  name       = "${var.name}-aws-access"
+  name       = "imagebuilder-aws-access"
   role       = aws_iam_role.DocetEC2ImageBuilderRole.name
-  #checkov:skip=CKV_AWS_290:The policy must allow *
-  #checkov:skip=CKV_AWS_355:The policy must allow *
+  # checkov:skip=CKV_AWS_290:The policy must allow *
+  # checkov:skip=CKV_AWS_355:The policy must allow *
   policy    = data.aws_iam_policy_document.aws_policy.json
 }
 

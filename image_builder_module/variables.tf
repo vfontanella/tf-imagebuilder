@@ -19,28 +19,28 @@ variable "container_components" {
 }
 
 variable image_recipes {
-  type = map({
+  type = map(object({
     enabled      = bool
     version      = string
     description  = string
     parent_image = string
-  })
+  }))
 }
 
 variable container_recipes {
-  type = map({
+  type = map(object({
     enabled      = bool
     version      = string
     description  = string
     parent_image = string
     target_repo  = string
-  })
+  }))
 }
 
 variable imagebuilder_infrastructure_configuration {
   type = map(object({
-    name           = string
-    description    = string
+    name           = optional(string)
+    description    = optional(string)
     instance_types = list(string)
     subnet_id      = string
   }))
@@ -75,14 +75,14 @@ variable image {
 }
 
 variable pipelines {
-  type = map(object{{
+  type = map(object({
     enabled      = bool
     name         = string
   }))
 }
 
 variable image_distribution {
-  type map(object({
+  type         = map(object({
     name       = optional(string)
     account_id = list(string)
     region     = string
@@ -103,7 +103,7 @@ variable "pipeline_schedule_expression" {
   default     = "cron(0 0 * * ? *)"
 }
 
-variable is_image {
+variable "is_image" {
   type        = bool
   description = "select, toggle switch to build  AMI image instead"
   default     = true
@@ -113,5 +113,33 @@ variable "additional_tags" {
   type        = map(string)
   description = "A mapping of additional resource tags"
   default     = {}
+}
+
+variable attach_custom_policy {
+  type = bool
+  description = "attach custom policy to imagebuilder role"
+  default = false
+}
+
+variable custom_policy_arn {
+  type = string
+  description = "Image builder custom policy"
+}
+
+variable imagebuilder_security_group {
+  type = string
+  description = "Imagebuilder security group name"
+  default = "imagebuilder"
+}
+
+variable vpc_id {
+  type = string
+  description = "VPC where the Imagebuilder infrastructure will be created"
+}
+
+variable source_cidr {
+  type = string
+  description = "CIDR to be allowed ingress into the imagebuilder instance"
+  default = ""
 }
 
