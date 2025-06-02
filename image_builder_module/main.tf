@@ -24,7 +24,14 @@ resource "aws_imagebuilder_image_recipe" "image_recipe" {
   name         = each.key
   version      = each.value.version
   parent_image = each.value.parent_image
-  component   = [for k, v in aws_imagebuilder_component.image_component : { component_arn = v.arn }]
+  dynamic component {
+    for_each = {
+      for k, v in aws_imagebuilder_component.image_component : v.arn => v
+    }
+    content {
+        component_arn = component.value
+    }
+  } 
   block_device_mapping {
     device_name = "/dev/xvda"
     ebs {
@@ -40,19 +47,27 @@ resource "aws_imagebuilder_container_recipe" "container_recipe" {
   name         = each.key
   version      = each.value.version
   parent_image = each.value.parent_image
-  component   = [for k, v in aws_imagebuilder_component.container_component : { component_arn = v.arn }]
+  dynamic component {
+    for_each = {
+      for k, v in aws_imagebuilder_component.container_component : v.arn => v
+    }
+    content {
+        component_arn = component.value
+    }
+  }  
   container_type = "DOCKER"
   target_repository {
     service         = "ECR"
     repository_name = each.value.target_repo
   }
+  dockerfile_template_data = each.value.dockerfile_template_data
 }
 
 resource "aws_security_group" "imagebuilder_security_group" {
   #checkov:skip=CKV2_AWS_5:Security Group is being attached if var create_security_group is true
     name        = "${var.imagebuilder_security_group}-sg"
     description = "Security Group for for the EC2 Image Builder Build Instances"
-    vpc_id      = var.vpc_id ? var.vpc_id : data.aws_vpc.selected.vpc_id
+    vpc_id      = var.vpc_id ? var.vpc_id : data.aws_vpc.selected.id
 
     tags =  merge(
     var.additional_tags,
@@ -69,44 +84,41 @@ resource "aws_security_group_rule" "sg_https_ingress" {
     to_port           = 443
     protocol          = "tcp"
     cidr_blocks       = var.source_cidr ? var.source_cidr : data.aws_vpc.selected.cidr_block
-    security_group_id = aws_security_group.imagebuilder_security_group["${var.imagebuilder_security_group}-sg"].id
+    security_group_id = aws_security_group.imagebuilder_security_group[*].id
     description       = "HTTPS from VPC"
 }
 
 resource "aws_security_group_rule" "sg_rdp_ingress" {
-  for_each = { for k in compact([for k, v in var.imagebuilder_security_group: v.enabled ? k : ""]): k => var.imagebuilder_security_group[k] }
 
     type              = "ingress"
     from_port         = 3389
     to_port           = 3389
     protocol          = "tcp"
     cidr_blocks       = var.source_cidr ? var.source_cidr : data.aws_vpc.selected.cidr_block
-    security_group_id = aws_security_group.imagebuilder_security_group["${var.imagebuilder_security_group}-sg"].id
+    security_group_id = aws_security_group.imagebuilder_security_group[*].id
     description       = "RDP from the source variable CIDR"
 }
 
 resource "aws_security_group_rule" "sg_ssh_ingress" {
-  for_each = { for k in compact([for k, v in var.imagebuilder_security_group: v.enabled ? k : ""]): k => var.imagebuilder_security_group[k] }
 
     type              = "ingress"
     from_port         = 22
     to_port           = 22
     protocol          = "tcp"
     cidr_blocks       = var.source_cidr ? var.source_cidr : data.aws_vpc.selected.cidr_block
-    security_group_id = aws_security_group.imagebuilder_security_group["${var.imagebuilder_security_group}-sg"].id
+    security_group_id = aws_security_group.imagebuilder_security_group[*].id
     description       = "RDP from the source variable CIDR"
 }
 
 #tfsec:ignore:aws-vpc-no-public-egress-sgr
 resource "aws_security_group_rule" "sg_internet_egress" {
-  for_each = { for k in compact([for k, v in var.imagebuilder_security_group: v.enabled ? k : ""]): k => var.imagebuilder_security_group[k] }
 
     type              = "egress"
     from_port         = 0
     to_port           = 0
     protocol          = "all"
     cidr_blocks       = ["0.0.0.0/0"]
-    security_group_id = aws_security_group.imagebuilder_security_group[each.key].id
+    security_group_id = aws_security_group.imagebuilder_security_group[*].id
     description       = "Access to the internet"
 }
 
@@ -118,7 +130,7 @@ resource "aws_imagebuilder_infrastructure_configuration" "imagebuilder_infrastru
     subnet_id                     = each.value.subnet_id
     security_group_ids            = [aws_security_group.imagebuilder_security_group[*].id]
     terminate_instance_on_failure = true
-    instance_profile_name         = aws_iam_instance_profile.EC2InstanceProfileImageBuilder.name
+    instance_profile_name         = aws_iam_instance_profile.iam_instance_profile.name
 }
 
 resource aws_imagebuilder_workflow image_workflow {
@@ -141,9 +153,9 @@ resource aws_imagebuilder_workflow container_workflow {
 
 resource "aws_imagebuilder_image" "imagebuilder_image" {
   for_each = { for k in compact([for k, v in var.image: v.enabled ? k : ""]): k => var.image[k] }
-    image_recipe_arn                 = aws_imagebuilder_image_recipe.imagebuilder_image_recipe[0].arn
+    image_recipe_arn                 = aws_imagebuilder_image_recipe.image_recipe[0].arn
     infrastructure_configuration_arn = aws_imagebuilder_infrastructure_configuration.imagebuilder_infrastructure_configuration[0].arn
-    distribution_configuration_arn   = try(aws_imagebuilder_distribution_configuration.imagebuilder_distribution_configuration[0].arn, null)
+    distribution_configuration_arn   = try(aws_imagebuilder_distribution_configuration.image_distribution[0].arn, null)
 
     # TODO enable tests configuration
     image_tests_configuration {
@@ -168,7 +180,9 @@ resource "aws_imagebuilder_image_pipeline" "image_pipeline" {
     infrastructure_configuration_arn = aws_imagebuilder_infrastructure_configuration.imagebuilder_infrastructure_configuration[0].arn
     image_recipe_arn                 = var.is_image ? aws_imagebuilder_image_recipe.image_recipe[0].arn : null
     container_recipe_arn             = var.is_image ? null : aws_imagebuilder_container_recipe.container_recipe[0].arn
-    workflow_arn                     = var.is_image ? aws_imagebuilder_workflow.image_workflow[0].arn : aws_imagebuilder_workflow.container_workflow[0].arn
+    workflow {
+      workflow_arn                     = var.is_image ? aws_imagebuilder_workflow.image_workflow[0].arn : aws_imagebuilder_workflow.container_workflow[0].arn
+    }
     dynamic "schedule" {
       for_each = var.pipeline_schedule_type == "manual" ? [] : [1]
         content {
@@ -225,12 +239,6 @@ resource aws_iam_role DocetEC2ImageBuilderRole {
     }
   )
   force_detach_policies = false
-  managed_policy_arns = [
-    "arn:aws:iam::aws:policy/AmazonS3FullAccess",
-    "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
-    "arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilder",
-    "arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilderECRContainerBuilds",
-  ]
   max_session_duration = 3600
   name                 = "EC2InstanceProfileForImageBuilder"
   path                 = "/"
@@ -253,13 +261,18 @@ data "aws_iam_policy_document" "assume" {
   }
 }
 
-resource "aws_iam_role_policy_attachment" "imagebuilder" {
-  policy_arn = "arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilder"
+resource "aws_iam_role_policy_attachment" "manageds3fullaccess" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonS3FullAccess"
   role       = aws_iam_role.DocetEC2ImageBuilderRole.name
 }
 
-resource "aws_iam_role_policy_attachment" "ssm" {
+resource "aws_iam_role_policy_attachment" "managedssminstancecore" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+  role       = aws_iam_role.DocetEC2ImageBuilderRole.name
+}
+
+resource "aws_iam_role_policy_attachment" "imagebuilder" {
+  policy_arn = "arn:aws:iam::aws:policy/EC2InstanceProfileForImageBuilder"
   role       = aws_iam_role.DocetEC2ImageBuilderRole.name
 }
 
