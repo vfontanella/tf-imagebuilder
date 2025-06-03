@@ -1,0 +1,185 @@
+name: "Windows-Agents-Component"
+description: "build windows agents."
+schemaVersion: 1.0
+
+parameters:
+  - github-token-param:
+      type: string
+      default: "/github_token/windows_agents"
+      description: "SSM parameter path for GitHub token"
+  - artifactory-lab-pass:
+      type: string
+      default: "/artifactory/lab-pass"
+      description: "SSM parameter path for Artifactory Lab pass"
+
+phases:
+  - name: build
+    steps:
+      - name: StartDocker
+        action: ExecutePowerShell
+        inputs:
+          commands:
+            - |
+              # Verify Docker service exists and start it
+              Write-Host "Checking for Docker installation..."
+              $maxAttempts = 30
+              $attempt = 0
+              do {
+                  Write-Host "Attempt $attempt of $maxAttempts"
+                  
+                  # Check if Docker service exists
+                  $service = Get-Service docker -ErrorAction SilentlyContinue
+                  if ($service) { 
+                      Write-Host "Docker service found with status: $($service.Status)"
+                      break 
+                  } else {
+                      Write-Host "WARNING: Docker service NOT FOUND on attempt $attempt"
+                      
+                      # Additional diagnostic information
+                      Write-Host "Looking for any Docker-related services..."
+                      $dockerServices = Get-Service | Where-Object {$_.Name -like "*docker*"}
+                      if ($dockerServices) {
+                          Write-Host "Found these Docker-related services:"
+                          $dockerServices | Format-Table Name, Status
+                      } else {
+                          Write-Host "No Docker-related services found in the system"
+                      }
+                      
+                      Write-Host "Checking Docker installation directory..."
+                      if (Test-Path "C:\Program Files\Docker") {
+                          Write-Host "Docker installation directory exists"
+                      } else {
+                          Write-Host "Docker installation directory NOT FOUND"
+                      }
+                  }
+                  
+                  Write-Host "Waiting 10 seconds before next attempt..."
+                  Start-Sleep -Seconds 10
+                  $attempt++
+              } while ($attempt -lt $maxAttempts)
+
+              if ($attempt -eq $maxAttempts) {
+                  Write-Error "Docker service was not found after $maxAttempts attempts. Docker installation may have failed."
+                  exit 1
+              }
+
+              # Start Docker service
+              $arrService = Get-Service -Name docker
+              if ($arrService.Status -ne 'Running') {
+                Write-Host "Starting Docker service..."
+                sc.exe start docker
+                Start-Sleep -Seconds 10
+              }
+
+              # Verify Docker is responding
+              Write-Host "Verifying Docker functionality..."
+              docker version
+              if ($LASTEXITCODE -ne 0) {
+                  Write-Error "Docker is not responding after starting the service"
+                  exit 1
+              }
+
+      - name: InstallAwsCli
+        action: ExecutePowerShell
+        inputs:
+          commands:
+            - |
+              # Install AWS CLI (ensure it's available for ECR login)
+              # Write-Host "Installing AWS CLI..."
+              msiexec.exe /i https://awscli.amazonaws.com/AWSCLIV2.msi /qn
+              Write-Host "AWS CLI installed successfully."
+
+      - name: InstallGit
+        action: ExecutePowerShell
+        inputs:
+          commands:
+            - |
+              $ErrorActionPreference = 'Stop'
+
+              # Install Git
+              Write-Host "Installing Git..."
+              Invoke-WebRequest -Uri "https://github.com/git-for-windows/git/releases/download/v2.43.0.windows.1/Git-2.43.0-64-bit.exe" -OutFile "C:\Windows\Temp\GitInstaller.exe"
+              Start-Process "C:\Windows\Temp\GitInstaller.exe" -ArgumentList "/VERYSILENT" -Wait
+              Write-Host "Git installation completed."
+
+      - name: CloneRepository
+        action: ExecutePowerShell
+        inputs:
+          commands:
+            - |
+              Set-Location -Path "C:\Windows\Temp"
+              # Clone the repo
+              Get-Location
+              $paths = 'C:\Windows\Temp\repo'
+              foreach ($path in $paths) {
+                if (Test-Path -LiteralPath $path) {
+                Remove-Item -LiteralPath $path -Verbose -Recurse -WhatIf
+                } else {
+                  "Path doesn't exist: $path"
+                }
+              }
+              Write-Host "Cloning repository..."
+              $token = "{{ aws:ssm:resolve(github-token-param) }}"
+              $repoUrl = "https://${token}@github.com/wp-docet/CICDaaS-jenkins-agents.git"
+              git clone -b US2117281-windows-agent-build $repoUrl repo
+
+      - name: DockerLogin
+        action: ExecutePowerShell
+        inputs:
+          commands:
+            - |
+              # $ErrorActionPreference = 'Stop'
+
+              # Login to ECR and Artifactory
+              Write-Host "Logging in to Amazon ECR and Artifactory..."
+              $Region = "eu-west-1"
+              $AccountId = (Invoke-RestMethod http://169.254.169.254/latest/dynamic/instance-identity/document).accountId
+              $RepoURI = "$AccountId.dkr.ecr.$Region.amazonaws.com"
+              aws ecr get-login-password --region $Region | docker login --username AWS --password-stdin $RepoURI
+              $pass = "{{ aws:ssm:resolve(artifactory-lab-pass) }}"
+              echo ${pass} | docker login --username admin --password-stdin artifactory.luigi-lab.worldpay.io 
+              Write-Host "ECR and Artifactory login successful."
+
+      - name: BuildAndPushDockerImages
+        action: ExecutePowerShell
+        inputs:
+          commands:
+            - |
+              # $ErrorActionPreference = 'Stop'
+
+              # Build and Push
+              Write-Host "Building and Pushing Docker Images..."
+
+              Set-Location -Path "C:\Windows\Temp"
+
+              # Find Dockerfiles
+              cd C:\Windows\Temp\repo\windows-agents
+              $Dockerfiles = Get-ChildItem -Path . -Filter "Dockerfile.*" -Name
+
+              # If no Dockerfiles found, create a dummy
+              if ($Dockerfiles.Count -eq 0) {
+                Write-Host "No Dockerfiles found, creating a dummy one..."
+                @"
+              FROM mcr.microsoft.com/windows/servercore:ltsc2019
+              RUN echo 'Dummy image created'
+              "@ | Out-File -Encoding ASCII Dockerfile.dummy
+                $Dockerfiles = @("Dockerfile.dummy")
+              }
+
+              # Build and push each Dockerfile
+              foreach ($Dockerfile in $Dockerfiles) {
+                $ImageName = $Dockerfile.Replace("Dockerfile.", "")
+                $Region = "eu-west-1"
+                $AccountId = (Invoke-RestMethod http://169.254.169.254/latest/dynamic/instance-identity/document).accountId
+                $RepoURI = "$AccountId.dkr.ecr.$Region.amazonaws.com"                
+                $FullTag = "$RepoURI/docet-windows-agents:$ImageName"
+                $artifactoryTag = "artifactory.luigi-lab.worldpay.io/docker-local/${ImageName}:latest"
+                Write-Host "Building image $ImageName..."
+                # for docker build ...
+                docker build -f $Dockerfile -t $FullTag .
+                docker push $FullTag
+                docker build -f $Dockerfile -t $artifactoryTag .
+                docker push $artifactoryTag
+              }
+
+              Write-Host "All Docker images built and pushed successfully."

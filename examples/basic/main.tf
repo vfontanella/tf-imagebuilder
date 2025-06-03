@@ -1,3 +1,13 @@
+
+provider "aws" {
+  region  = "eu-west-1"
+  profile = "019415651432_PS-hwpawsrestrictedadmin"
+  assume_role {
+    role_arn = "arn:aws:iam::019415651432:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_PS-hwpawsrestrictedadmin_9f0753853603f105"
+  }
+}
+
+
 module image_builder {
   source = "../../image_builder_module"
   is_image         = true
@@ -67,5 +77,4 @@ module image_builder {
   custom_policy_arn = ""
 
 }
-
 

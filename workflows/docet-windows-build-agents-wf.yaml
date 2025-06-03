@@ -1,0 +1,26 @@
+name: build-image
+description: Workflow to build an AMI
+schemaVersion: 1.0
+
+steps:
+  - name: LaunchBuildInstance
+    action: LaunchInstance
+    onFailure: Abort
+    inputs:
+      waitFor: "ssmAgent"
+
+  - name: ApplyBuildComponents
+    action: ExecuteComponents
+    onFailure: Abort
+    inputs:
+      instanceId.$: "$.stepOutputs.LaunchBuildInstance.instanceId"
+
+  - name: TerminateBuildInstance
+    action: TerminateInstance
+    onFailure: Continue
+    inputs:
+      instanceId.$: "$.stepOutputs.LaunchBuildInstance.instanceId"
+
+outputs:
+  - name: "ImageId"
+    value: "$.stepOutputs.LaunchBuildInstance.instanceId"

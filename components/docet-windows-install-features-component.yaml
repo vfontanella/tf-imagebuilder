@@ -1,0 +1,20 @@
+name: "Windows-Agents-Component"
+description: "build windows agents."
+schemaVersion: 1.0
+parameters:
+phases:
+  - name: build
+    steps:
+      - name: EnableWindowsFeatures
+        action: ExecutePowerShell
+        inputs:
+          commands:
+            - |
+              Write-Output "Enabling Containers and Hyper-V..."
+              Install-WindowsFeature -Name containers
+              Install-WindowsFeature -Name Hyper-V -IncludeManagementTools
+              $dir = $env:TEMP + "\ssm"
+              New-Item -ItemType directory -Path $dir -Force
+              cd $dir
+              (New-Object System.Net.WebClient).DownloadFile("https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/windows_amd64/AmazonSSMAgentSetup.exe", $dir + "\AmazonSSMAgentSetup.exe")
+              Start-Process .\AmazonSSMAgentSetup.exe -ArgumentList @("/q", "/log", "install.log") -Wait

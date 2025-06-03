@@ -1,0 +1,62 @@
+name: "Windows-Agents-Component"
+description: "build windows agents."
+schemaVersion: 1.0
+parameters:
+phases:
+  - name: build
+    steps:
+      - name: InstallNuGetProvider
+        action: ExecutePowerShell
+        inputs:
+          commands:
+            - |
+              Write-Output "Installing NuGet provider..."
+              [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+              Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
+
+      - name: InstallDocker
+        action: ExecutePowerShell
+        inputs:
+          commands:
+            - |
+              Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+              Write-Output "Installing Docker..."
+              choco install docker-engine -y
+              choco install docker-cli -y
+              Start-Service docker
+              Set-Service docker -StartupType Automatic
+
+      - name: InstallBuildx
+        action: ExecutePowerShell
+        inputs:
+          commands:
+            - |
+              Write-Output "Installing Docker Buildx..."
+              $cliPluginPath = "C:\Program Files\Docker\cli-plugins"
+              New-Item -ItemType Directory -Path $cliPluginPath -Force | Out-Null
+              $buildxUrl = "https://github.com/docker/buildx/releases/download/v0.23.0/buildx-v0.23.0.windows-amd64.exe"
+              $buildxDest = "$cliPluginPath\docker-buildx.exe"
+              Invoke-WebRequest -Uri $buildxUrl -OutFile $buildxDest
+              Write-Output "Docker Buildx installed at $buildxDest"
+
+      - name: UpdatePath
+        action: ExecutePowerShell
+        inputs:
+          commands:
+            - |
+              $dockerBinPath = "C:\ProgramData\chocolatey\lib\docker-cli\tools"
+              $env:Path += ";$dockerBinPath"
+              [System.Environment]::SetEnvironmentVariable("PATH", $env:Path, [EnvironmentVariableTarget]::Machine)
+              Write-Output "Docker path updated"
+
+  - name: validate
+    steps:
+      - name: ValidateDocker
+        action: ExecutePowerShell
+        inputs:
+          commands:
+            - |
+              Write-Output "Validating Docker installation..."
+              docker version
+              docker buildx version
+              docker buildx inspect
