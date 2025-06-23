@@ -67,7 +67,7 @@ resource "aws_security_group" "imagebuilder_security_group" {
   #checkov:skip=CKV2_AWS_5:Security Group is being attached if var create_security_group is true
     name        = "${var.imagebuilder_security_group}-sg"
     description = "Security Group for for the EC2 Image Builder Build Instances"
-    vpc_id      = var.vpc_id ? var.vpc_id : data.aws_vpc.selected.id
+    vpc_id      = var.vpc_id !="" ? var.vpc_id : data.aws_vpc.selected.id
 
     tags =  merge(
     var.additional_tags,
@@ -83,8 +83,8 @@ resource "aws_security_group_rule" "sg_https_ingress" {
     from_port         = 443
     to_port           = 443
     protocol          = "tcp"
-    cidr_blocks       = var.source_cidr ? var.source_cidr : data.aws_vpc.selected.cidr_block
-    security_group_id = aws_security_group.imagebuilder_security_group[*].id
+    cidr_blocks       = [var.source_cidr !="" ? var.source_cidr : data.aws_vpc.selected.cidr_block]
+    security_group_id = aws_security_group.imagebuilder_security_group.id
     description       = "HTTPS from VPC"
 }
 
@@ -94,8 +94,8 @@ resource "aws_security_group_rule" "sg_rdp_ingress" {
     from_port         = 3389
     to_port           = 3389
     protocol          = "tcp"
-    cidr_blocks       = var.source_cidr ? var.source_cidr : data.aws_vpc.selected.cidr_block
-    security_group_id = aws_security_group.imagebuilder_security_group[*].id
+    cidr_blocks       = [var.source_cidr !="" ? var.source_cidr : data.aws_vpc.selected.cidr_block]
+    security_group_id = aws_security_group.imagebuilder_security_group.id
     description       = "RDP from the source variable CIDR"
 }
 
@@ -105,8 +105,8 @@ resource "aws_security_group_rule" "sg_ssh_ingress" {
     from_port         = 22
     to_port           = 22
     protocol          = "tcp"
-    cidr_blocks       = var.source_cidr ? var.source_cidr : data.aws_vpc.selected.cidr_block
-    security_group_id = aws_security_group.imagebuilder_security_group[*].id
+    cidr_blocks       = [var.source_cidr !="" ? var.source_cidr : data.aws_vpc.selected.cidr_block]
+    security_group_id = aws_security_group.imagebuilder_security_group.id
     description       = "RDP from the source variable CIDR"
 }
 
@@ -118,7 +118,7 @@ resource "aws_security_group_rule" "sg_internet_egress" {
     to_port           = 0
     protocol          = "all"
     cidr_blocks       = ["0.0.0.0/0"]
-    security_group_id = aws_security_group.imagebuilder_security_group[*].id
+    security_group_id = aws_security_group.imagebuilder_security_group.id
     description       = "Access to the internet"
 }
 
@@ -128,7 +128,7 @@ resource "aws_imagebuilder_infrastructure_configuration" "imagebuilder_infrastru
     description                   = each.value.description
     instance_types                = each.value.instance_types
     subnet_id                     = each.value.subnet_id
-    security_group_ids            = [aws_security_group.imagebuilder_security_group[*].id]
+    security_group_ids            = [aws_security_group.imagebuilder_security_group.id]
     terminate_instance_on_failure = true
     instance_profile_name         = aws_iam_instance_profile.iam_instance_profile.name
 }
@@ -173,15 +173,38 @@ resource "aws_imagebuilder_image" "imagebuilder_image" {
     }
 }
 
+resource "aws_imagebuilder_lifecycle_policy" "imagebuilder_lifecycle_policy" {
+  for_each       = var.image
+  name           = "${each.key}-lifecycle-policy"
+  description    = "${each.key} Imagebuilder lifecycle Policy"
+  execution_role = aws_iam_role.imagebuilder_lifecycle_policy_role.arn
+  resource_type  = var.is_image ? "AMI_IMAGE" : "DOCKER_IMAGE"
+  policy_detail {
+    action {
+      type = each.value.lifecycle_policy_action_type
+    }
+    filter {
+      type            = each.value.lifecycle_policy_filter_type
+      value           = each.value.lifecycle_policy_filter_value
+      retain_at_least = each.value.lifecycle_policy_filter_retain
+      unit            = each.value.lifecycle_policy_filter_unit
+    }
+  }
+    resource_selection {
+      tag_map = each.value.lifecycle_policy_tags
+  }
+  depends_on = [aws_iam_role_policy_attachment.imagebuilder_lifecycle_policy_role_attachment]
+}
+
 resource "aws_imagebuilder_image_pipeline" "image_pipeline" {
   for_each = { for k in compact([for k, v in var.pipelines: v.enabled ? k : ""]): k => var.pipelines[k] }
   
     name                             = var.is_image ? "${each.value.name}-image-pipeline" : "${each.value.name}-container-pipeline"
-    infrastructure_configuration_arn = aws_imagebuilder_infrastructure_configuration.imagebuilder_infrastructure_configuration[0].arn
-    image_recipe_arn                 = var.is_image ? aws_imagebuilder_image_recipe.image_recipe[0].arn : null
-    container_recipe_arn             = var.is_image ? null : aws_imagebuilder_container_recipe.container_recipe[0].arn
+    infrastructure_configuration_arn = aws_imagebuilder_infrastructure_configuration.imagebuilder_infrastructure_configuration["${each.key}"].arn
+    image_recipe_arn                 = var.is_image ? aws_imagebuilder_image_recipe.image_recipe["${each.key}"].arn : null
+    container_recipe_arn             = var.is_image ? null : aws_imagebuilder_container_recipe.container_recipe["${each.key}"].arn
     workflow {
-      workflow_arn                     = var.is_image ? aws_imagebuilder_workflow.image_workflow[0].arn : aws_imagebuilder_workflow.container_workflow[0].arn
+      workflow_arn                     = var.is_image ? aws_imagebuilder_workflow.image_workflow["${each.key}"].arn : aws_imagebuilder_workflow.container_workflow["${each.key}"].arn
     }
     dynamic "schedule" {
       for_each = var.pipeline_schedule_type == "manual" ? [] : [1]

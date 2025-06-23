@@ -39,6 +39,7 @@ variable container_recipes {
 
 variable imagebuilder_infrastructure_configuration {
   type = map(object({
+    enabled        = bool
     name           = optional(string)
     description    = optional(string)
     instance_types = list(string)
@@ -69,8 +70,13 @@ variable container_workflows {
 
 variable image {
   type = map(object({
-    enabled     = bool
-    timeouts    = string
+    enabled                        = bool
+    timeouts                       = string
+    lifecycle_policy_filter_type   = string
+    lifecycle_policy_filter_value  = string
+    lifecycle_policy_filter_retain = string
+    lifecycle_policy_filter_unit   = string
+    lifecycle_policy_tags          = map(string) 
   }))
 }
 
